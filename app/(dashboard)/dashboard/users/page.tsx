@@ -5,6 +5,7 @@ import Link from "next/link";
 import api from "@/lib/api";
 import { User } from "@/lib/types";
 import { imageLink } from "@/lib/util";
+import Pusher from "pusher-js";
 
 export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([]);
@@ -14,9 +15,28 @@ export default function UsersPage() {
   const [totalPages, setTotalPages] = useState(1);
   const [totalUsers, setTotalUsers] = useState(0);
   const [isSearching, setIsSearching] = useState(false);
+  const [notifications, setNotifications] = useState<string[]>([]);
 
   useEffect(() => {
     fetchUsers();
+    
+    // Initialize Pusher with your credentials
+    const pusher = new Pusher("e42ae8bc468e05ee61c5", {
+      cluster: "ap2",
+    });
+
+    // Subscribe to channel and listen for events
+    const channel = pusher.subscribe('user-status');
+    channel.bind('status-updated', (data: { message: string }) => {
+      addNotification(data.message);
+    });
+
+    // Cleanup on component unmount
+    return () => {
+      channel.unbind_all();
+      channel.unsubscribe();
+      pusher.disconnect();
+    };
   }, [currentPage]);
 
   const fetchUsers = async () => {
@@ -24,7 +44,6 @@ export default function UsersPage() {
       setLoading(true);
       let url = `/admin/users?limit=10&offset=${(currentPage - 1) * 10}`;
       
- 
       if (isSearching && searchEmail) {
         url = `/admin/users/search-by-email?email=${encodeURIComponent(searchEmail)}&limit=10&offset=${
           (currentPage - 1) * 10
@@ -32,26 +51,20 @@ export default function UsersPage() {
       }
 
       const response = await api.get(url);
-      console.log("Users API response:", response.data);
-
-   
+      
       let usersData = [];
       let totalCount = 0;
 
       if (Array.isArray(response.data)) {
-       
         usersData = response.data;
         totalCount = usersData.length;
       } else if (response.data && Array.isArray(response.data.users)) {
-       
         usersData = response.data.users;
         totalCount = response.data.totalCount || usersData.length;
       } else if (response.data && Array.isArray(response.data.data)) {
-   
         usersData = response.data.data;
         totalCount = response.data.total || usersData.length;
       } else {
-  
         usersData = response.data || [];
         totalCount = usersData.length;
       }
@@ -83,14 +96,29 @@ export default function UsersPage() {
     fetchUsers();
   };
 
-  const toggleUserStatus = async (userId: string, isActive: boolean) => {
+  const toggleUserStatus = async (userId: string, isActive: boolean, userEmail: string) => {
     try {
       await api.put(`/admin/users/${userId}/status`, { isActive: !isActive });
+      
+      // Create a notification message
+      const message = `User ${userEmail} has been ${!isActive ? 'activated' : 'deactivated'}`;
+      
+      // Show notification directly without using Pusher trigger
+      addNotification(message);
+      
       fetchUsers();
     } catch (error) {
       console.error("Error updating user status:", error);
       alert("Error updating user status");
     }
+  };
+
+  const addNotification = (message: string) => {
+    setNotifications(prev => [...prev, message]);
+    // Auto-remove notification after 5 seconds
+    setTimeout(() => {
+      setNotifications(prev => prev.filter(n => n !== message));
+    }, 5000);
   };
 
   const deleteUser = async (userId: string) => {
@@ -115,6 +143,18 @@ export default function UsersPage() {
 
   return (
     <div className="p-4 md:p-6">
+      {/* Notification Container */}
+      <div className="fixed top-4 right-4 z-50 space-y-2">
+        {notifications.map((notification, index) => (
+          <div 
+            key={index} 
+            className="bg-green-500 text-white px-4 py-2 rounded-md shadow-md animate-fadeIn"
+          >
+            {notification}
+          </div>
+        ))}
+      </div>
+
       <h1 className="text-2xl font-bold mb-6 text-gray-800">User Management</h1>
 
       <div className="mb-6">
@@ -210,7 +250,7 @@ export default function UsersPage() {
                     View
                   </Link>
                   <button
-                    onClick={() => toggleUserStatus(user.id, user.isActive)}
+                    onClick={() => toggleUserStatus(user.id, user.isActive, user.email)}
                     className={`text-sm font-medium ${
                       user.isActive
                         ? "text-yellow-600 hover:text-yellow-900"
@@ -298,7 +338,7 @@ export default function UsersPage() {
                         View
                       </Link>
                       <button
-                        onClick={() => toggleUserStatus(user.id, user.isActive)}
+                        onClick={() => toggleUserStatus(user.id, user.isActive, user.email)}
                         className={`mr-3 ${
                           user.isActive
                             ? "text-yellow-600 hover:text-yellow-900"
@@ -351,6 +391,16 @@ export default function UsersPage() {
           </div>
         </>
       )}
+      
+      <style jsx>{`
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(-10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fadeIn {
+          animation: fadeIn 0.3s ease-out;
+        }
+      `}</style>
     </div>
   );
 }
